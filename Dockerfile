@@ -5,7 +5,7 @@
     
     # Install build dependencies
     RUN apk add \
-        g++ cmake make libpq-dev git
+        g++ cmake make libpq-dev git linux-headers
     
     COPY . /app
     

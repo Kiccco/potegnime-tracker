@@ -1,3 +1,2 @@
-[submodule "libevent"]
-	path = libevent
-	url = https://github.com/libevent/libevent
+[submodule "external/libuv"]
+	path = external/libuv
