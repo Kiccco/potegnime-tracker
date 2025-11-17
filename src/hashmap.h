@@ -1,25 +1,32 @@
-#include <stdint.h>
-
 #ifndef HASHMAP_H
 #define HASHMAP_H
 
+#include <stdint.h>
+#include "common.h"
+#include "mem_pool.h"
+
 #define TABLE_SIZE 100
 
+
+
 typedef struct node_t {
-    char key[20];
-    void* value;
-    struct node_t* next_node;
+    union {
+        torrentfile_t torrentfile;
+        userinfo_t userinfo;
+    };
+    mem_node_t* root_node;
 } node_t;
 
 typedef struct hashmap_t {
-    node_t* nodes[TABLE_SIZE];
-    int (*cmp)(const char*, const char*);
-    uint64_t (*hash)(const char*);
+    StorageType storageType;
+    node_t nodes[TABLE_SIZE];
+    mem_pool_t* pool;
 
 } hashmap_t;
 
 
-hashmap_t* hashmap_init(int (*cmp_func)(const char*, const char*), uint64_t (*hash)(const char*));
+
+hashmap_t* hashmap_init(StorageType type, mem_pool_t* pool);
 
 void hashmap_insert(hashmap_t* hashmap, const char* key, void* value);
 void hashmap_remove(hashmap_t* hashmap, const char* key);

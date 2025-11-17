@@ -5,18 +5,22 @@
 
 #include "logger.h"
 
-hashmap_t* hashmap_init(int (*cmp_func)(const char*, const char*), uint64_t (*hash_func)(const char*)) {
+
+#define FNV_OFFSET 14695981039346656037UL
+#define FNV_PRIME 1099511628211UL
+
+static uint64_t hash_key(const char* key);
+static inline int compare(const char* key, const char* key2);
+
+
+hashmap_t* hashmap_init(StorageType type, mem_pool_t* pool) {
 
     hashmap_t* hashmap = (hashmap_t*)malloc(sizeof(hashmap_t));
     if (!hashmap)
         return NULL;
 
-    hashmap->cmp = cmp_func;
-    hashmap->hash = hash_func;
-
-    for(uint32_t i = 0; i < TABLE_SIZE; i++) {
-        hashmap->nodes[i] = NULL;
-    }
+    hashmap->storageType = type;
+    hashmap->pool = pool;
 
     return hashmap;
 }
@@ -29,9 +33,10 @@ void hashmap_insert(hashmap_t* hashmap, const char* key, void* value) {
         return;
     }
 
-    size_t index = hashmap->hash(key) % TABLE_SIZE;
+    U64 hashValue = hash_key(key);
 
-    node_t* current_node = hashmap->nodes[index];
+    node_t* current_node = &hashmap->nodes[hashValue % TABLE_SIZE];
+    /*
     if (hashmap->nodes[index] != NULL) {
 
         node_t* current_node = hashmap->nodes[index];
@@ -50,21 +55,17 @@ void hashmap_insert(hashmap_t* hashmap, const char* key, void* value) {
         LOG_ERROR("hashmap_insert(): new_node == NULL");
         return;
     }
+    */
 
-    strncpy(new_node->key, key, 20);
-    new_node->value = value;
-    new_node->next_node = NULL;
-    
-    if (hashmap->nodes[index] == NULL) {
-        hashmap->nodes[index] = new_node;
+    mem_node_t* node = mem_pool_just_alloc_node(hashmap->pool, hashValue, USERINFO);
+    if (node == NULL) {
+        LOG_ERROR("hashmap_insert(): failed to allocate new node. Probably ran out of space");
         return;
     }
-       
-    while(current_node->next_node != NULL) {
-        current_node = current_node->next_node;
-    }
-    current_node->next_node = new_node;
 
+    current_node->root_node = node_avl_add(current_node->root_node, node);
+    strncpy(node->userinfo.peer_id, key, 20);
+    
 }
 
 void hashmap_remove(hashmap_t* hashmap, const char* key) {
@@ -75,13 +76,24 @@ void hashmap_remove(hashmap_t* hashmap, const char* key) {
     }
 
 
-    size_t index = hashmap->hash(key) % TABLE_SIZE;
+    U64 hashValue = hash_key(key);
 
-    node_t* current_node = hashmap->nodes[index];
+    node_t* current_node = &hashmap->nodes[hashValue % TABLE_SIZE];
     if(current_node == NULL)
         return;
 
-    if (hashmap->cmp(current_node->key, key) == 0) {
+    mem_node_t* memNode = node_avl_find(current_node->root_node, hashValue);
+    if (memNode == NULL) {
+        LOG_DEBUG("hashmap_remove(): nothing to remove");
+        return;
+    }
+
+    current_node->root_node = node_avl_remove(current_node->root_node, memNode);
+
+    mem_pool_free_node(hashmap->pool, memNode);
+
+    /*
+    if (compare(memNode->key, key) == 0) {
         hashmap->nodes[index] = current_node->next_node;
         free(current_node->value);
         free(current_node);
@@ -91,7 +103,7 @@ void hashmap_remove(hashmap_t* hashmap, const char* key) {
     node_t* previous_node = NULL;
     while(current_node != NULL) {
 
-        if (hashmap->cmp(current_node->key, key) == 0 && previous_node != NULL) {
+        if (compare(current_node->key, key) == 0 && previous_node != NULL) {
             previous_node->next_node = current_node->next_node;
             free(current_node->value);
             free(current_node);
@@ -102,7 +114,7 @@ void hashmap_remove(hashmap_t* hashmap, const char* key) {
         previous_node = current_node;
         current_node = current_node->next_node;
     }
-
+    */
 }
 
 
@@ -113,18 +125,35 @@ void* hashmap_get(hashmap_t* hashmap, const char* key) {
         return NULL;
     }
 
-    size_t index = hashmap->hash(key) % TABLE_SIZE;
+    U64 hashValue = hash_key(key);
 
-    node_t* current_node = hashmap->nodes[index];
+    node_t* current_node = &hashmap->nodes[hashValue % TABLE_SIZE];
 
-    while(current_node != NULL) {
+    mem_node_t* memNode = node_avl_find(current_node->root_node, hashValue);
 
-        if (hashmap->cmp(current_node->key, key) == 0)
-            return current_node->value;
+    if (memNode == NULL)
+        return NULL;
 
-        current_node = current_node->next_node;
-    }
+    if (hashmap->storageType == TORRENTFILE)
+        return &memNode->torrentfile;
+
+    if (hashmap->storageType == USERINFO)
+        return &memNode->userinfo;
 
     return NULL;
 }
+
+static uint64_t hash_key(const char* key) {
+    uint64_t hash = FNV_OFFSET;
+    for (const char* p = key; *p; p++) {
+        hash ^= (uint64_t)(unsigned char)(*p);
+        hash *= FNV_PRIME;
+    }
+    return hash % TABLE_SIZE;
+}
+
+static inline int compare(const char* key, const char* key2) {
+    return strncmp(key, key2, 20);
+}
+
 
