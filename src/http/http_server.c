@@ -9,9 +9,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "../tracker_logic.h"
+
 #define HTTP_PORT 8080
 #define MAX_HEADERS 5
 
+#define PEER_ID_LEN 20
+#define AUTH_ID_LEN 40
+#define INFO_HASH_LEN 20
+
+typedef struct {
+    const char* value;
+    size_t value_len;
+} search_value;
 
 typedef struct http_headers_t {
     const char* key;
@@ -34,10 +44,10 @@ static void alloc_cb(uv_handle_t* handle, size_t size, uv_buf_t* buf) {
 	*buf = uv_buf_init(malloc(size), size);
 }
 
-static void parse_request(const char* buf, const char* buf_end, char* method);
-static const char* parse_token(const char* buf, const char* buf_end, char search_char, char** token, U32* token_len);
-static void parse_uri(const char* buf, const char* buf_end);
-static void decode_urlencoded_param(const char* buf, const char* buf_end, char* dest, U32 max_len);
+static I32 parse_request(uv_stream_t* stream, const char* buf, const char* buf_end, char* method, http_headers_t* headers);
+static const char* parse_token(const char* buf, const char* buf_end, char search_char, char** token, size_t* token_len);
+static I32 parse_uri(uv_stream_t* stream, const char* buf, const char* buf_end);
+static size_t decode_urlencoded_param(const char* buf, const char* buf_end, char* dest, U32 max_len);
 
 
 void http_server_init(uv_loop_t* loop) {
@@ -70,6 +80,7 @@ static void on_new_connection(uv_stream_t *server, int status) {
 
     uv_tcp_t *client = (uv_tcp_t*) malloc(sizeof(uv_tcp_t));
     
+
     uv_tcp_init(server->loop, client);
     if (uv_accept(server, (uv_stream_t*) client) == 0) {
         uv_read_start((uv_stream_t*) client, alloc_cb, on_read);
@@ -87,12 +98,17 @@ static void on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
     }
     
     char method[10];
-    parse_request(buf->base, buf->base + buf->len, method);
+
+    http_headers_t headers[MAX_HEADERS] = {};
+
+
+    I32 code = parse_request(stream, buf->base, buf->base + buf->len, method, headers);
 
     const char* res = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\ntest";
     
 
     uv_write_t req;
+
     uv_write(&req, stream, (const uv_buf_t[]) {
         { .base = res, .len = strlen(res)}
     }, 1, NULL);
@@ -102,10 +118,10 @@ static void on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
 
 }
 
-static void parse_request(const char* buf, const char* buf_end, char* method) {
+static I32 parse_request(uv_stream_t* stream, const char* buf, const char* buf_end, char* method, http_headers_t* headers) {
 
     char* method_test = NULL;
-    U32 method_len = 0;
+    size_t method_len = 0;
     //method
     buf = parse_token(buf, buf_end, ' ', &method_test, &method_len);
     if (strncmp(method_test, "GET", method_len) == 0) {
@@ -114,7 +130,7 @@ static void parse_request(const char* buf, const char* buf_end, char* method) {
 
     //uri
     char* uri = NULL;
-    U32 uri_len = 0;
+    size_t uri_len = 0;
 
     buf = parse_token(buf, buf_end, ' ', &uri, &uri_len);
     LOG_DEBUG("URI: %.*s", uri_len, uri);
@@ -122,17 +138,16 @@ static void parse_request(const char* buf, const char* buf_end, char* method) {
 
     //http version
     char* version = NULL;
-    U32 version_len = 0;
+    size_t version_len = 0;
     buf = parse_token(buf, buf_end, '\n', &version, &version_len);
     LOG_DEBUG("HTTP VERSION: %.*s", version_len, version);
 
-    http_headers_t headers[MAX_HEADERS] = {};
     U32 i = 0;
 
     LOG_DEBUG("parsing headers...");
     while (buf != buf_end && i < MAX_HEADERS) {
         char* key = NULL;
-        U32 key_len = 0;
+        size_t key_len = 0;
 
         buf = parse_token(buf, buf_end, ':', &key, &key_len);
         if (buf == NULL) {
@@ -143,7 +158,7 @@ static void parse_request(const char* buf, const char* buf_end, char* method) {
         ++buf;
 
         char* value = NULL;
-        U32 value_len = 0;
+        size_t value_len = 0;
 
         buf = parse_token(buf, buf_end, '\r', &value, &value_len);
         if (buf == NULL) {
@@ -165,60 +180,147 @@ static void parse_request(const char* buf, const char* buf_end, char* method) {
         i++;
     }
 
-    parse_uri(uri, uri + uri_len);
-
-
+    return parse_uri(stream, uri, uri + uri_len);
 }
 
-static void parse_uri(const char* buf, const char* buf_end) {
+
+static const search_value search_values[] = {
+    { "auth", 4 }, { "info_hash",  9 }, { "peer_id", 7 }, { "port", 4 }, { "uploaded", 8 }, { "downloaded", 10 }, { "left", 4 }, { "event", 5 }, { "numwant", 7 }
+};
+
+static I32 parse_query(const char** buf, const char** buf_end, char** query, size_t* query_len, char** value, size_t* value_len) {
+ 
+        *buf = parse_token(*buf, *buf_end, '=', query, query_len);
+        if (*buf == NULL) {
+            LOG_DEBUG("buf == NULL when parsing query name.");
+            return -3;
+        }
+
+        *buf = parse_token(*buf, *buf_end, '&', value, value_len);
+        if (*buf == NULL) {
+            LOG_DEBUG("buf == NULL when parsing query value.");
+            return -3;
+        }
+
+        search_value* ptr = search_values;
+
+        size_t s = sizeof(search_values) / sizeof(search_value);
+
+        while (ptr <= &search_values[s - 1]) {
+
+            if (*query_len == ptr->value_len && memcmp(*query, ptr->value, ptr->value_len) == 0) {
+                return ptr - &search_values[0];
+            }
+            ptr++;
+        }
+
+    return -1;
+}
+
+static I32 parse_uri(uv_stream_t* stream, const char* buf, const char* buf_end) {
 
     char* path = NULL;
-    U32 path_len = 0;
+    size_t path_len = 0;
 
     const char* buf_start = buf;
 
     buf = parse_token(buf, buf_end, '?', &path, &path_len);
-    if (buf == NULL) {
-        //kva pol ce je sam npr. /announce
-        return;
-    }
+    if (buf == NULL)
+        return -20;
+
+
+    U8 info_hash[INFO_HASH_LEN] = {};
+    U8 peer_id[PEER_ID_LEN] = {};
+    U8 auth[AUTH_ID_LEN] = {};
+    U16 port = 0;
+
+    U32 uploaded = 0;
+    U32 downloaded = 0;
+    U32 left = 0;
+
+    EVENT event = EVENT_STARTED;
+
+    char* query = NULL;
+    size_t query_len = 0;
+
+    char* value = NULL;
+    size_t value_len = 0;
 
     while (buf <= buf_end) {
 
-        char* query = NULL;
-        U32 query_len = 0;
-
-        char* value = NULL;
-        U32 value_len = 0;
-        
-        buf = parse_token(buf, buf_end, '=', &query, &query_len);
-        if (buf == NULL) {
-            LOG_DEBUG("buf == NULL when parsing query name.");
+        I32 res = parse_query(&buf, &buf_end, &query, &query_len, &value, &value_len);
+        if (res == -3)
             break;
-        }
 
-        buf = parse_token(buf, buf_end, '&', &value, &value_len);
-        if (buf == NULL) {
-            LOG_DEBUG("buf == NULL when parsing query value.");
-            break;
-        }
+        switch (res)
+        {
+            case 0: { //auth
+                break;
+            }
 
-        if (strncmp(query, "info_hash", query_len) == 0) {
-            unsigned char info_hash[20] = {};
-            decode_urlencoded_param(value, value + value_len, info_hash, 20);
-            
+            case 1: { //info_hash
+                if (decode_urlencoded_param(value, value + value_len, info_hash, INFO_HASH_LEN) != INFO_HASH_LEN) {
+                    return -21;
+                }
+                break;
+            }
+            case 2: { //peer_id
+                if (decode_urlencoded_param(value, value + value_len, peer_id, PEER_ID_LEN) != PEER_ID_LEN) {
+                    return -21;
+                }
+
+                break;
+            }
+            case 3: { //port
+                port = strtoul(value, (char**)(&value + value_len), 10);
+                if (port == 0) {
+                    return -21;
+                }
+
+                break;
+            }
+            case 4: { //uploaded
+                uploaded = strtoul(value, (char**)(&value + value_len), 10);
+                break;
+            }
+            case 5: {
+                downloaded = strtoul(value, (char**)(&value + value_len), 10);
+                break;
+            }
+            case 6: { //left
+
+            }
+            case 7: { //event
+                if (memcmp(value, "started", value_len) == 0)
+                    event = EVENT_STARTED;
+                else if (memcmp(value, "stopped", value_len) == 0)
+                    event = EVENT_STOPPED;
+                else if (memcmp(value, "completed", value_len) == 0)
+                    event = EVENT_COMPLETED;
+
+                break;
+            }
+            case -1:
+            default:
+                break;
         }
-        
-        
     }
 
     if (strncmp(path, "/announce", path_len) == 0) {
-
+        LOG_DEBUG("info_hash: %x, peer_id: %s, port: %u, downloaded: %u, uploaded: %u, event: %d \n",
+                info_hash, peer_id, port, downloaded, uploaded, event);
+        
+        return 0;
     }
     else if (strncmp(path, "/scrape", path_len) == 0) {
         LOG_DEBUG("Scrape not implemented");
+        return -2;
     }
+
+    return -1;
 }
+
+
 
 
 static unsigned char fromhex(unsigned char x) {
@@ -228,7 +330,7 @@ static unsigned char fromhex(unsigned char x) {
   return 0xff;
 }
 
-static void decode_urlencoded_param(const char* buf, const char* buf_end, char* dest, U32 max_len) {
+static size_t decode_urlencoded_param(const char* buf, const char* buf_end, char* dest, U32 max_len) {
 
     U32 i = 0;
     U8 hi = 0;
@@ -247,11 +349,13 @@ static void decode_urlencoded_param(const char* buf, const char* buf_end, char* 
 
         i++;
     }
+
+    return i;
 }
 
-static const char* parse_token(const char* buf, const char* buf_end, char search_char, char** token, U32* token_len) {
+static const char* parse_token(const char* buf, const char* buf_end, char search_char, char** token, size_t* token_len) {
 
-    const char* buf_start = buf;
+    char* buf_start = buf;
 
     char* end = strchr(buf, search_char);
     if (end == NULL)
@@ -278,3 +382,6 @@ static const char* parse_token(const char* buf, const char* buf_end, char search
     return buf;
 }
 
+static void http_send_error() {
+
+}

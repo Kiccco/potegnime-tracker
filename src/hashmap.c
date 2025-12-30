@@ -57,7 +57,7 @@ void hashmap_insert(hashmap_t* hashmap, const char* key, void* value) {
     }
     */
 
-    mem_node_t* node = mem_pool_just_alloc_node(hashmap->pool, hashValue, USERINFO);
+    mem_node_t* node = mem_pool_just_alloc_node(hashmap->pool, hashValue, hashmap->storageType);
     if (node == NULL) {
         LOG_ERROR("hashmap_insert(): failed to allocate new node. Probably ran out of space");
         return;

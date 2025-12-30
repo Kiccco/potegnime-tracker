@@ -10,7 +10,7 @@
 
 void tracker_logic_init();
 
-void tracker_add_user(const char* unique_id);
+void tracker_add_user(const char* unique_id, U32 ip, U16 port, U32 numwant);
 void tracker_add_torrent(const char* info_hash);
 
 

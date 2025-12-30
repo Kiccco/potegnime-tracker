@@ -19,12 +19,13 @@ static mem_pool_t mem_pool;
 static hashmap_t* user_map;
 static hashmap_t* torrent_map;
 
-
+static mem_pool_t user_pool;
 
 void tracker_logic_init() {
 
     mem_pool_init(&mem_pool, 128);
 
+    mem_pool_init(&user_pool, 128);
     
     int r;
     if ((r = pthread_mutex_init(&mutex, NULL)) != 0) {
@@ -32,31 +33,9 @@ void tracker_logic_init() {
         return;
     }
 
-    user_map = hashmap_init(USERINFO, &mem_pool);
-    if (user_map == NULL) {
-        LOG_FATAL("tracker_logic_init(): failed to initialize user_map");
-        return;
-    }
-
-    torrent_map = hashmap_init(TORRENTFILE, &mem_pool);
-    if (torrent_map == NULL) {
-        LOG_FATAL("tracker_logic_init(): failed to initialize user_map");
-        return;
-    }
-
-    /*
-    hashmap_insert(user_map, "test", NULL);
-    hashmap_insert(user_map, "test2", NULL);
-    hashmap_insert(user_map, "test3", NULL);
-    hashmap_insert(user_map, "test4", NULL);
-
-    hashmap_remove(user_map, "test2");
-    hashmap_remove(user_map, "test4");
-    */
-
 }
 
-void tracker_add_user(const char* unique_id) {
+void tracker_add_user(const char* unique_id, U32 ip, U16 port, U32 numwant) {
     pthread_mutex_lock(&mutex);
 
     //userinfo_t* new_user = (userinfo_t*)malloc(sizeof(userinfo_t));
@@ -80,6 +59,15 @@ void tracker_remove_user(const char* unique_id) {
 
 }
 
+
+void tracker_add_torrent(const char* info_hash) {
+    pthread_mutex_lock(&mutex);
+
+
+
+    pthread_mutex_unlock(&mutex);
+
+}
 
 void tracker_remove_torrent(const char* info_hash) {
     pthread_mutex_lock(&mutex);
