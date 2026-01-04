@@ -124,8 +124,8 @@ static I32 parse_request(uv_stream_t* stream, const char* buf, const char* buf_e
     size_t method_len = 0;
     //method
     buf = parse_token(buf, buf_end, ' ', &method_test, &method_len);
-    if (strncmp(method_test, "GET", method_len) == 0) {
-        LOG_DEBUG("Got GET method");
+    if (strncmp(method_test, "GET", method_len) != 0) {
+        return -2;
     }
 
     //uri
@@ -260,13 +260,13 @@ static I32 parse_uri(uv_stream_t* stream, const char* buf, const char* buf_end) 
 
             case 1: { //info_hash
                 if (decode_urlencoded_param(value, value + value_len, info_hash, INFO_HASH_LEN) != INFO_HASH_LEN) {
-                    return -21;
+                    return -20;
                 }
                 break;
             }
             case 2: { //peer_id
                 if (decode_urlencoded_param(value, value + value_len, peer_id, PEER_ID_LEN) != PEER_ID_LEN) {
-                    return -21;
+                    return -20;
                 }
 
                 break;
@@ -274,7 +274,7 @@ static I32 parse_uri(uv_stream_t* stream, const char* buf, const char* buf_end) 
             case 3: { //port
                 port = strtoul(value, (char**)(&value + value_len), 10);
                 if (port == 0) {
-                    return -21;
+                    return -20;
                 }
 
                 break;
@@ -380,8 +380,4 @@ static const char* parse_token(const char* buf, const char* buf_end, char search
         buf++;
     
     return buf;
-}
-
-static void http_send_error() {
-
 }
